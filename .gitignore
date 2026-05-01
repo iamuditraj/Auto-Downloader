@@ -4,4 +4,4 @@ __pycache__/
 .env
 links.py
 downloads/
-session_log.txt
+logs/
