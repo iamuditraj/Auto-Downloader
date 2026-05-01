@@ -65,7 +65,7 @@ playwright install chromium
 
 ### 3. Usage
 
-1.  Open `links.py` and add your target URLs to the `LINKS` list.
+1.  Open `links/links.txt` and paste your target URLs, one per line. (A `links.txt.example` is provided as a template).
 2.  Run the main script:
 
 ```bash
