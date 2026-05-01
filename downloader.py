@@ -340,7 +340,7 @@ def download_files(extracted: list[dict]) -> dict:
 
                 if retries < MAX_RETRIES and err_code not in NO_RETRY_CODES:
                     messages_to_log.append(f"\n[ RETRY {retries+1}/{MAX_RETRIES} ] {job['url']} ({reason})")
-                    pending.append({"url": job["url"], "retry_count": retries + 1})
+                    pending.insert(0, {"url": job["url"], "retry_count": retries + 1})
                 else:
                     failed += 1
                     failed_urls.append(job["url"])
