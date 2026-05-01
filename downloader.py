@@ -10,8 +10,9 @@ import time
 
 from log_utils import log
 
-MAX_CONCURRENT = 5
+MAX_CONCURRENT = 1
 MAX_RETRIES = 2
+PROCESS_TIMEOUT = 600  # Kill aria2c if it hasn't exited after 10 minutes
 OUTPUT_DIR = os.path.join(os.path.splitdrive(os.path.abspath(__file__))[0] + os.sep, "downloads")
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -71,21 +72,23 @@ def download_files(extracted: list[dict]) -> dict:
     retry_counts: dict[str, int] = {}  # url -> number of retries attempted
     log(f"[INFO] {total_queued} file(s) queued for download.\n")
 
-    # --- Active process tracking: list of (Popen, url, slot_number) ---
-    active: list[tuple[subprocess.Popen, str, int]] = []
+    # --- Active process tracking: list of (Popen, url, slot_number, start_time) ---
+    active: list[tuple[subprocess.Popen, str, int, float]] = []
 
-    def start_download(url: str, slot: int) -> subprocess.Popen:
+    def start_download(url: str, slot: int) -> tuple[subprocess.Popen, float]:
         """Launch an aria2c subprocess for the given URL."""
         cmd = [
             "aria2c",
             "--continue=true",
-            "--max-connection-per-server=4",
-            "--split=4",
+            "--max-connection-per-server=1",
+            "--split=1",
             "--file-allocation=none",
+            "--max-tries=3",
+            "--retry-wait=2",
             f"--dir={OUTPUT_DIR}",
             f"--user-agent={USER_AGENT}",
             f"--referer={REFERER}",
-            "--timeout=60",
+            "--timeout=30",
             url,
         ]
         proc = subprocess.Popen(
@@ -94,7 +97,7 @@ def download_files(extracted: list[dict]) -> dict:
             stderr=subprocess.DEVNULL,
         )
         log(f"[ START ] (slot {slot}) {url}")
-        return proc
+        return proc, time.time()
 
     def log_queue_state():
         """Print current queue status."""
@@ -105,18 +108,32 @@ def download_files(extracted: list[dict]) -> dict:
     while pending and len(active) < MAX_CONCURRENT:
         url = pending.pop(0)
         slot_counter += 1
-        proc = start_download(url, slot_counter)
-        active.append((proc, url, slot_counter))
+        proc, started = start_download(url, slot_counter)
+        active.append((proc, url, slot_counter, started))
 
     log_queue_state()
 
     # --- Poll loop ---
+    poll_tick = 0
     while active:
         time.sleep(1)
+        poll_tick += 1
+
+        # Heartbeat: show active slots every 30 seconds
+        if poll_tick % 30 == 0:
+            log(f"[HEARTBEAT] {len(active)} active, {len(pending)} pending — still downloading...")
 
         finished = []
-        for i, (proc, url, slot) in enumerate(active):
+        now = time.time()
+        for i, (proc, url, slot, started) in enumerate(active):
             retcode = proc.poll()
+
+            # Kill hung processes that exceed the timeout
+            if retcode is None and (now - started) > PROCESS_TIMEOUT:
+                log(f"[ TIMEOUT ] {url} — killing after {PROCESS_TIMEOUT}s")
+                proc.kill()
+                retcode = proc.wait()
+
             if retcode is not None:
                 finished.append(i)
                 if retcode == 0:
@@ -144,8 +161,8 @@ def download_files(extracted: list[dict]) -> dict:
             while pending and len(active) < MAX_CONCURRENT:
                 url = pending.pop(0)
                 slot_counter += 1
-                proc = start_download(url, slot_counter)
-                active.append((proc, url, slot_counter))
+                proc, started = start_download(url, slot_counter)
+                active.append((proc, url, slot_counter, started))
 
             log_queue_state()
 
