@@ -5,6 +5,7 @@ with real-time progress, speed display, and stall detection.
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -99,6 +100,13 @@ def _remove(gid: str):
 # Progress display
 # ---------------------------------------------------------------------------
 
+def _format_fname(fname: str) -> str:
+    match = re.search(r'(part\d+)', fname, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return fname
+
+
 def _fmt_bytes(b: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
         if b < 1024:
@@ -132,7 +140,7 @@ def _render_progress(active_jobs: list[dict]):
         done = int(s.get("completedLength", 0))
         speed = int(s.get("downloadSpeed", 0))
         fname = os.path.basename(s.get("files", [{}])[0].get("path", job["url"]))
-        fname = fname[:35].ljust(35)
+        fname = _format_fname(fname)[:35].ljust(35)
 
         bar = _progress_bar(done, total)
         spd = _fmt_speed(speed)
@@ -276,6 +284,7 @@ def download_files(extracted: list[dict]) -> dict:
 
         now = time.time()
         finished_indices = []
+        messages_to_log = []
 
         for i, job in enumerate(active_jobs):
             try:
@@ -292,35 +301,52 @@ def download_files(extracted: list[dict]) -> dict:
                 job["last_progress"] = done
                 job["last_progress_time"] = now
             elif status == "active" and (now - job["last_progress_time"]) > STALL_TIMEOUT:
-                log(f"\n[ STALL ] {job['url']} — no progress for {STALL_TIMEOUT}s, killing...")
+                messages_to_log.append(f"\n[ STALL ] {job['url']} — no progress for {STALL_TIMEOUT}s, killing...")
                 _remove(job["gid"])
                 status = "stalled"
+                job["status_dict"]["status"] = "stalled"
 
             if status in ("complete", "error", "stalled"):
                 finished_indices.append(i)
-
                 if status == "complete":
-                    succeeded += 1
-                    fname = os.path.basename(
-                        s.get("files", [{}])[0].get("path", job["url"])
-                    )
+                    # Force completedLength to totalLength for final 100% render
                     total = int(s.get("totalLength", 0))
-                    log(f"\n[ DONE  ] {fname} ({_fmt_bytes(total)})")
+                    job["status_dict"]["completedLength"] = total
+                    job["status_dict"]["downloadSpeed"] = 0
 
+        # Render final state BEFORE logging, so the old block is visually 100%
+        if finished_indices and active_jobs:
+            _render_progress(active_jobs)
+
+        # Process finished jobs
+        for i in finished_indices:
+            job = active_jobs[i]
+            status = job["status_dict"].get("status", "")
+
+            if status == "complete":
+                succeeded += 1
+                fname = os.path.basename(
+                    job["status_dict"].get("files", [{}])[0].get("path", job["url"])
+                )
+                display_fname = _format_fname(fname)
+                total = int(job["status_dict"].get("totalLength", 0))
+                messages_to_log.append(f"\n[ DONE  ] {display_fname} ({_fmt_bytes(total)})")
+            elif status != "stalled":
+                s = job["status_dict"]
+                err_code = int(s.get("errorCode", -1))
+                err_msg = s.get("errorMessage", "unknown error")
+                reason = ARIA2C_ERRORS.get(err_code, err_msg or f"exit code {err_code}")
+                retries = job["retry_count"]
+
+                if retries < MAX_RETRIES and err_code not in NO_RETRY_CODES:
+                    messages_to_log.append(f"\n[ RETRY {retries+1}/{MAX_RETRIES} ] {job['url']} ({reason})")
+                    pending.append({"url": job["url"], "retry_count": retries + 1})
                 else:
-                    err_code = int(s.get("errorCode", -1))
-                    err_msg = s.get("errorMessage", "unknown error")
-                    reason = ARIA2C_ERRORS.get(err_code, err_msg or f"exit code {err_code}")
-                    retries = job["retry_count"]
+                    failed += 1
+                    failed_urls.append(job["url"])
+                    messages_to_log.append(f"\n[ FAIL  ] {job['url']} — {reason}")
 
-                    if retries < MAX_RETRIES and err_code not in NO_RETRY_CODES:
-                        log(f"\n[ RETRY {retries+1}/{MAX_RETRIES} ] {job['url']} ({reason})")
-                        pending.append({"url": job["url"], "retry_count": retries + 1})
-                    else:
-                        failed += 1
-                        failed_urls.append(job["url"])
-                        log(f"\n[ FAIL  ] {job['url']} — {reason}")
-
+            if status != "stalled":
                 _remove(job["gid"])
 
         # Remove finished jobs (reverse to preserve indices)
@@ -331,6 +357,13 @@ def download_files(extracted: list[dict]) -> dict:
         while pending and len(active_jobs) < MAX_CONCURRENT:
             item = pending.pop(0)
             enqueue(item["url"], item["retry_count"])
+
+        # Log messages and setup new progress block if needed
+        for msg in messages_to_log:
+            log(msg)
+            
+        if messages_to_log and active_jobs:
+            _print_progress_header(len(active_jobs))
 
         # Re-draw progress for remaining active jobs
         if active_jobs:

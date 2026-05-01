@@ -4,9 +4,11 @@ Logger setup - configures the shared "autodownloader" logger with a file handler
 
 import logging
 import os
+from datetime import datetime
 
-LOG_DIR = os.path.join(os.path.splitdrive(os.path.abspath(__file__))[0] + os.sep, "downloads")
-LOG_FILE = os.path.join(LOG_DIR, "session_log.txt")
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+LOG_FILE = os.path.join(LOG_DIR, f"logs_{timestamp}.txt")
 
 
 def setup_logger() -> str:

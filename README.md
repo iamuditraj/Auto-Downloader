@@ -7,10 +7,11 @@ A high-performance, automated tool designed to extract and download files from w
 ## ✨ Features
 
 *   **Smart Extraction**: Uses Playwright to bypass intermediate pages and extract direct download links.
-*   **Parallel Downloads**: Manages a queue of up to **5 concurrent downloads** using `aria2c`.
-*   **Resilient**: Automatic retries for failed downloads (up to 2 retries per file).
+*   **Stable Downloads**: Downloads files sequentially (1 active download) to avoid host throttling, but uses `aria2c` to download each file in parallel chunks.
+*   **Resilient**: Automatic retries for failed downloads (up to 2 retries per file) and stall detection (45s timeout).
 *   **Optimized Performance**: Uses `aria2c` with multi-connection (4 connections per server) and split-file downloading.
-*   **Detailed Logging**: Maintains session logs and provides real-time progress updates in the terminal.
+*   **Clean UI**: Real-time terminal progress with smart filename shortening (e.g. displaying just `part006`) to keep the console tidy.
+*   **Detailed Logging**: Maintains per-session log files with full execution history.
 *   **Dry Run Support**: Test link extraction without initiating large downloads.
 
 ---
@@ -75,15 +76,16 @@ python main.py
 ## ⚙️ Configuration
 
 You can customize the download behavior in `downloader.py`:
-*   `MAX_CONCURRENT`: Number of parallel download slots (Default: `5`).
+*   `MAX_CONCURRENT`: Number of parallel download slots (Default: `1` for stability).
 *   `MAX_RETRIES`: Number of retry attempts for failed downloads (Default: `2`).
-*   `OUTPUT_DIR`: Where files are saved (Default: `C:\downloads` on Windows, or relative `downloads/` folder).
+*   `STALL_TIMEOUT`: Seconds without progress before restarting a download (Default: `45`).
+*   `OUTPUT_DIR`: Where files are saved (Default: `downloads/` folder within the project).
 
 ---
 
 ## 📝 Logging
 
-Every session is logged with a timestamped summary. Logs are saved to the download directory as `session_log.txt`. The log includes:
+Every session is logged with a timestamped summary. A brand new log file is automatically generated for every run (e.g., `logs_2026-05-01_22-48-51.txt`) inside the `logs/` directory. The log includes:
 *   Original vs. Extracted URLs.
 *   Download success/failure status.
 *   Elapsed time and error details.
