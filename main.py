@@ -11,8 +11,8 @@ from datetime import datetime
 from links import LINKS
 from extractor import extract_download_urls
 from downloader import download_files
-from logger_setup import setup_logger
-from log_utils import log
+from logger.logger_setup import setup_logger
+from logger.log_utils import log
 
 
 def main():

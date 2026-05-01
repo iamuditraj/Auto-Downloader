@@ -2,6 +2,6 @@
 __pycache__/
 *.pyc
 .env
-links.py
 downloads/
 logs/
+links/links.txt

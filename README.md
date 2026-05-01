@@ -20,14 +20,21 @@ A high-performance, automated tool designed to extract and download files from w
 
 ```text
 Auto-Downloader/
-├── main.py           # Entry point — orchestrates the workflow
-├── links.py          # Configuration — add your source URLs here
-├── extractor.py      # Browser automation engine (Playwright)
-├── downloader.py     # Download engine (aria2c wrapper)
-├── logger_setup.py   # Logging configuration
-├── log_utils.py      # Logging utility functions
-├── requirements.txt  # Python dependencies
-└── README.md         # This file
+├── main.py                 # Core entry point
+├── downloader.py           # Core download engine
+├── extractor.py            # Core extraction engine
+├── requirements.txt        # Python dependencies
+├── README.md               # This file
+├── .gitignore
+├── links/                  # All link-related files
+│   ├── __init__.py         # Exposes the LINKS list
+│   ├── links.txt           # The raw download links
+│   └── links.txt.example   # The template for new users
+├── logger/                 # All logging scripts
+│   ├── log_utils.py        # Contains the log() function
+│   └── logger_setup.py     # Contains the setup_logger() config
+├── downloads/              # Generated files
+└── logs/                   # Generated text logs
 ```
 
 ---

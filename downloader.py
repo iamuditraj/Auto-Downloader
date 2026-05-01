@@ -14,7 +14,7 @@ import time
 import urllib.request
 import urllib.error
 
-from log_utils import log
+from logger.log_utils import log
 
 # --- Config ---
 MAX_CONCURRENT = 1
