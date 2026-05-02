@@ -85,6 +85,22 @@ async def extract_download_urls(links: list[str]) -> list[dict]:
     return results
 
 
+async def extract_single_url(link: str) -> dict:
+    """
+    Extract the download token for a SINGLE link.
+    Reuses extract_download_urls() with a single-element list.
+
+    Returns:
+        dict: { "original": url, "download_url": url|None, "status": "ok"|"failed" }
+    """
+    results = await extract_download_urls([link])
+    return results[0] if results else {
+        "original": link,
+        "download_url": None,
+        "status": "failed",
+    }
+
+
 # Quick manual test
 if __name__ == "__main__":
     from links import LINKS
