@@ -166,6 +166,31 @@ def _print_progress_header(n: int):
 # Single-file download (for pause/resume one-at-a-time flow)
 # ---------------------------------------------------------------------------
 
+def _cleanup_partial_files(job: dict):
+    """Delete incomplete downloaded file and its .aria2 control file."""
+    if not job or not job.get("status_dict"):
+        return
+    
+    files = job["status_dict"].get("files", [])
+    if not files:
+        return
+        
+    file_path = files[0].get("path", "")
+    if not file_path:
+        return
+        
+    aria2_path = file_path + ".aria2"
+    
+    # Try to delete both
+    for p in (file_path, aria2_path):
+        if os.path.exists(p):
+            try:
+                os.remove(p)
+                log(f"  [CLEANUP] Deleted partial file: {os.path.basename(p)}")
+            except Exception as e:
+                log(f"  [CLEANUP] Failed to delete {os.path.basename(p)}: {e}")
+
+
 def download_single_file(entry: dict) -> dict:
     """
     Download a single file using an aria2c RPC daemon.
@@ -235,6 +260,7 @@ def download_single_file(entry: dict) -> dict:
         return {"succeeded": False, "url": url, "error": "aria2c daemon did not start"}
 
     result = {"succeeded": False, "url": url, "error": None}
+    job = None
 
     try:
         # Add URL to aria2c
@@ -305,20 +331,12 @@ def download_single_file(entry: dict) -> dict:
 
     except KeyboardInterrupt:
         log("\n[INFO] Interrupted — shutting down aria2c daemon...")
-        shutdown()
         raise
 
     finally:
         shutdown()
+        if not result["succeeded"]:
+            _cleanup_partial_files(job)
 
     return result
 
-
-# Quick manual test
-if __name__ == "__main__":
-    test_data = {
-        "original": "https://example.com",
-        "download_url": "https://dl.fuckingfast.co/dl/test",
-        "status": "ok",
-    }
-    download_single_file(test_data)

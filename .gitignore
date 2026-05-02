@@ -6,3 +6,4 @@ downloads/
 logs/
 links/links.txt
 progress.json
+*.tmp

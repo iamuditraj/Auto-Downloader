@@ -22,7 +22,6 @@ async def extract_download_urls(links: list[str]) -> list[dict]:
         browser = await pw.chromium.launch(headless=True)
 
         for i, link in enumerate(links, start=1):
-            print(f"[{i}/{total}] Extracting: {link}")
 
             page = await browser.new_page()
             try:
@@ -59,7 +58,6 @@ async def extract_download_urls(links: list[str]) -> list[dict]:
                     "download_url": download_url,
                     "status": "ok",
                 })
-                print(f"  ✓ Found: {download_url}")
 
             except (ConnectionError, ValueError) as exc:
                 results.append({
@@ -67,7 +65,6 @@ async def extract_download_urls(links: list[str]) -> list[dict]:
                     "download_url": None,
                     "status": "failed",
                 })
-                print(f"  ✗ Failed: {exc}")
 
             except Exception as exc:
                 results.append({
@@ -75,7 +72,6 @@ async def extract_download_urls(links: list[str]) -> list[dict]:
                     "download_url": None,
                     "status": "failed",
                 })
-                print(f"  ✗ Failed (unexpected): {exc}")
 
             finally:
                 await page.close()
@@ -101,10 +97,3 @@ async def extract_single_url(link: str) -> dict:
     }
 
 
-# Quick manual test
-if __name__ == "__main__":
-    from links import LINKS
-
-    extracted = asyncio.run(extract_download_urls(LINKS))
-    for entry in extracted:
-        print(entry)
