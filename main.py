@@ -13,7 +13,7 @@ from datetime import datetime
 from links import LINKS
 from extractor import extract_single_url
 from downloader import download_single_file
-from progress_state import load_progress, mark_completed, mark_failed, get_remaining, reset_progress
+from progress_state import load_progress, mark_completed, mark_failed, get_remaining, reset_progress, clear_failed
 from logger.logger_setup import setup_logger
 from logger.log_utils import log
 
@@ -61,6 +61,9 @@ def main():
         log(f"  Failed        : {len(state['failed'])}")
         log(f"  Remaining     : {len(remaining)}")
         return
+
+    # Clear previously failed links so they are retried this session
+    clear_failed(state)
 
     remaining = get_remaining(LINKS, state)
     total_links = len(LINKS)

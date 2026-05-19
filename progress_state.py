@@ -59,6 +59,13 @@ def mark_failed(state: dict, url: str):
     save_progress(state)
 
 
+def clear_failed(state: dict):
+    """Clear the failed list to retry failed downloads."""
+    if state["failed"]:
+        state["failed"] = []
+        save_progress(state)
+
+
 def get_remaining(all_links: list, state: dict) -> list:
     """Return links that are not in completed or failed."""
     done = set(state["completed"]) | set(state["failed"])
