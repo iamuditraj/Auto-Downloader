@@ -4,6 +4,7 @@ Automates browser-based link extraction and file downloading.
 Supports pause/resume via progress tracking and 'p' + Enter input.
 """
 
+
 import asyncio
 import sys
 import threading
