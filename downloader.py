@@ -3,6 +3,8 @@ Downloader module - uses aria2c's JSON-RPC daemon for single-file downloads
 with real-time progress, speed display, and stall detection.
 """
 
+import asyncio
+import ctypes
 import json
 import os
 import re
@@ -13,6 +15,14 @@ import time
 import urllib.request
 
 from logger.log_utils import log
+
+# Enable VT100 escape sequences on Windows for Unicode progress bar
+if sys.platform == "win32":
+    try:
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+    except Exception:
+        pass
 
 # --- Config ---
 STALL_TIMEOUT = 45        # seconds without progress before killing a download
@@ -54,9 +64,17 @@ def _rpc(method: str, params: list = None) -> dict:
         return json.loads(resp.read())
 
 
-def _add_url(url: str) -> str:
+async def _async_rpc(method: str, params: list = None) -> dict:
+    """Non-blocking wrapper: run the synchronous _rpc in a thread executor
+    so it doesn't block the asyncio event loop (which nodriver needs for
+    its websocket keepalive)."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _rpc, method, params)
+
+
+async def _async_add_url(url: str) -> str:
     """Add a URL to aria2c and return its GID."""
-    result = _rpc("aria2.addUri", [[url], {
+    result = await _async_rpc("aria2.addUri", [[url], {
         "max-connection-per-server": "4",
         "split": "4",
         "file-allocation": "none",
@@ -70,23 +88,23 @@ def _add_url(url: str) -> str:
     return result["result"]
 
 
-def _get_status(gid: str) -> dict:
+async def _async_get_status(gid: str) -> dict:
     """Return aria2c status dict for a GID."""
-    result = _rpc("aria2.tellStatus", [gid, [
+    result = await _async_rpc("aria2.tellStatus", [gid, [
         "gid", "status", "totalLength", "completedLength",
         "downloadSpeed", "errorCode", "errorMessage", "files",
     ]])
     return result["result"]
 
 
-def _remove(gid: str):
+async def _async_remove(gid: str):
     """Force-remove a GID from aria2c (even if errored)."""
     try:
-        _rpc("aria2.forceRemove", [gid])
+        await _async_rpc("aria2.forceRemove", [gid])
     except Exception:
         pass
     try:
-        _rpc("aria2.removeDownloadResult", [gid])
+        await _async_rpc("aria2.removeDownloadResult", [gid])
     except Exception:
         pass
 
@@ -123,40 +141,33 @@ def _progress_bar(done: int, total: int, width: int = 20) -> str:
     return f"[{bar}] {pct*100:5.1f}%"
 
 
-def _render_progress(active_jobs: list[dict]):
+def _render_progress(job: dict):
     """
-    Redraw progress lines in-place using ANSI escape codes.
-    Each job dict: { gid, url, status_dict, retry_count }
+    Redraw a single progress line in-place using \r (carriage return).
+    Works reliably across all Windows terminals.
     """
-    lines = []
-    for job in active_jobs:
-        s = job["status_dict"]
-        total = int(s.get("totalLength", 0))
-        done = int(s.get("completedLength", 0))
-        speed = int(s.get("downloadSpeed", 0))
-        fname = os.path.basename(s.get("files", [{}])[0].get("path", job["url"]))
-        fname = _format_fname(fname)[:35].ljust(35)
+    s = job["status_dict"]
+    total = int(s.get("totalLength", 0))
+    done = int(s.get("completedLength", 0))
+    speed = int(s.get("downloadSpeed", 0))
+    fname = os.path.basename(s.get("files", [{}])[0].get("path", job["url"]))
+    fname = _format_fname(fname)[:25].ljust(25)
 
-        bar = _progress_bar(done, total)
-        spd = _fmt_speed(speed)
-        size = f"{_fmt_bytes(done)}/{_fmt_bytes(total)}" if total else "? / ?"
+    bar = _progress_bar(done, total)
+    spd = _fmt_speed(speed)
+    size = f"{_fmt_bytes(done)}/{_fmt_bytes(total)}" if total else "? / ?"
 
-        lines.append(f"  {fname}  {bar}  {spd:>12}  {size}")
+    line = f"  {fname} {bar} {spd:>12}  {size}"
 
-    # Move cursor up by number of lines previously written, then overwrite
-    if active_jobs:
-        # \033[{n}A = move up n lines; \r = carriage return; \033[K = erase to EOL
-        up = f"\033[{len(active_jobs)}A"
-        sys.stdout.write(up)
-        for line in lines:
-            sys.stdout.write(f"\r\033[K{line}\n")
-        sys.stdout.flush()
+    # Pad to terminal width to clear previous line remnants, then \r
+    try:
+        cols = os.get_terminal_size().columns
+    except OSError:
+        cols = 120
+    line = line[:cols].ljust(cols)
 
-
-def _print_progress_header(n: int):
-    """Print blank placeholder lines that _render_progress will overwrite."""
-    for _ in range(n):
-        print()
+    sys.stdout.write(f"\r{line}")
+    sys.stdout.flush()
 
 
 
@@ -191,7 +202,7 @@ def _cleanup_partial_files(job: dict):
                 log(f"  [CLEANUP] Failed to delete {os.path.basename(p)}: {e}")
 
 
-def download_single_file(entry: dict) -> dict:
+async def download_single_file(entry: dict) -> dict:
     """
     Download a single file using an aria2c RPC daemon.
     Starts and stops the daemon for this one file.
@@ -215,8 +226,8 @@ def download_single_file(entry: dict) -> dict:
 
     # Try to shut down any orphan daemon from a previous interrupted run
     try:
-        _rpc("aria2.shutdown")
-        time.sleep(1)
+        await _async_rpc("aria2.shutdown")
+        await asyncio.sleep(1)
     except Exception:
         pass
 
@@ -237,21 +248,24 @@ def download_single_file(entry: dict) -> dict:
         stderr=subprocess.DEVNULL,
     )
 
-    def shutdown():
+    async def shutdown():
         try:
-            _rpc("aria2.shutdown")
+            await _async_rpc("aria2.shutdown")
         except Exception:
             pass
+        
+        # wait in executor to avoid blocking loop
+        loop = asyncio.get_event_loop()
         try:
-            daemon.wait(timeout=5)
-        except subprocess.TimeoutExpired:
+            await loop.run_in_executor(None, daemon.wait, 5)
+        except Exception:
             daemon.kill()
 
     # Wait for daemon to be ready
     for _ in range(20):
-        time.sleep(0.3)
+        await asyncio.sleep(0.3)
         try:
-            _rpc("aria2.getVersion")
+            await _async_rpc("aria2.getVersion")
             break
         except Exception:
             continue
@@ -264,7 +278,7 @@ def download_single_file(entry: dict) -> dict:
 
     try:
         # Add URL to aria2c
-        gid = _add_url(url)
+        gid = await _async_add_url(url)
 
         job = {
             "gid": gid,
@@ -275,14 +289,14 @@ def download_single_file(entry: dict) -> dict:
             "last_progress_time": time.time(),
         }
 
-        _print_progress_header(1)
+        # Progress will be rendered on a single line via \r
 
         # --- Poll loop ---
         while True:
-            time.sleep(1.0)
+            await asyncio.sleep(1.0)
 
             try:
-                s = _get_status(gid)
+                s = await _async_get_status(gid)
             except Exception:
                 continue
 
@@ -297,27 +311,28 @@ def download_single_file(entry: dict) -> dict:
                 job["last_progress_time"] = now
             elif status == "active" and (now - job["last_progress_time"]) > STALL_TIMEOUT:
                 log(f"\n[ STALL ] Download stalled for {STALL_TIMEOUT}s, killing...")
-                _remove(gid)
+                await _async_remove(gid)
                 result["error"] = f"Download stalled for {STALL_TIMEOUT}s"
                 break
 
             # Render progress
-            _render_progress([job])
+            _render_progress(job)
 
             if status == "complete":
                 # Force 100% for final render
                 total = int(s.get("totalLength", 0))
                 job["status_dict"]["completedLength"] = total
                 job["status_dict"]["downloadSpeed"] = 0
-                _render_progress([job])
+                _render_progress(job)
 
                 fname = os.path.basename(
                     s.get("files", [{}])[0].get("path", url)
                 )
                 display_fname = _format_fname(fname)
-                log(f"\n[ DONE  ] {display_fname} ({_fmt_bytes(total)})")
+                sys.stdout.write("\n")  # Move past the progress line
+                log(f"[ DONE  ] {display_fname} ({_fmt_bytes(total)})")
                 result["succeeded"] = True
-                _remove(gid)
+                await _async_remove(gid)
                 break
 
             elif status == "error":
@@ -326,7 +341,7 @@ def download_single_file(entry: dict) -> dict:
                 reason = ARIA2C_ERRORS.get(err_code, err_msg or f"exit code {err_code}")
                 log(f"\n[ FAIL  ] {reason}")
                 result["error"] = reason
-                _remove(gid)
+                await _async_remove(gid)
                 break
 
     except KeyboardInterrupt:
@@ -334,7 +349,7 @@ def download_single_file(entry: dict) -> dict:
         raise
 
     finally:
-        shutdown()
+        await shutdown()
         if not result["succeeded"]:
             _cleanup_partial_files(job)
 

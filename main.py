@@ -37,7 +37,7 @@ def _pause_listener():
             break
 
 
-def main():
+async def async_main():
     global pause_requested
 
     # Handle --reset flag
@@ -107,7 +107,7 @@ def main():
 
             # --- Extract token for THIS file ---
             log(f"  Extracting download token...")
-            result = asyncio.run(extract_single_url(link))
+            result = await extract_single_url(link)
 
             if result["status"] != "ok":
                 log(f"  [EXTRACT FAIL] Could not extract token (attempt {attempt}/{MAX_FILE_RETRIES})")
@@ -116,7 +116,7 @@ def main():
             log(f"  ✓ Token extracted. Starting download...")
 
             # --- Download THIS file ---
-            dl_result = download_single_file(result)
+            dl_result = await download_single_file(result)
 
             if dl_result["succeeded"]:
                 success = True
@@ -164,7 +164,10 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(async_main())
+        loop.close()
     except KeyboardInterrupt:
         log(f"\n[FORCE STOP] Ctrl+C — session terminated immediately.")
         sys.exit(1)
