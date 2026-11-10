@@ -29,29 +29,8 @@ _last_tab = None   # tracks current tab so it can be cleaned up on errors
 
 
 async def _get_browser():
-    """Return a shared browser instance, launching one if needed.
-
-    Also verifies the existing connection is still alive — Chrome sessions
-    can go stale when the browser sits idle during long downloads.
-    """
+    """Return a shared browser instance, launching one if needed."""
     global _browser
-    if _browser is not None:
-        # Health-check: verify the browser process is still alive.
-        # Chrome can exit unexpectedly while idle during long downloads.
-        is_dead = False
-        try:
-            # Check if the underlying Chrome process has exited
-            proc = getattr(_browser, '_process', None) or getattr(_browser, 'process', None)
-            if proc and proc.returncode is not None:
-                is_dead = True
-        except Exception:
-            is_dead = True
-
-        if is_dead:
-            log("  [BROWSER] Browser process died — restarting...")
-            _browser = None
-            await asyncio.sleep(1)
-
     if _browser is None:
         _browser = await uc.start(
             headless=False,
@@ -153,8 +132,8 @@ async def _extract_from_tab(browser, link: str) -> dict:
     We bypass the first click by clearing window.dynamic before clicking,
     so the very first click triggers the HTMX POST directly.
 
-    The tab is closed after extraction. Cloudflare clearance cookies persist
-    at the browser level, so closing the tab doesn't affect CF status.
+    After extraction, the tab is navigated to about:blank (not closed) to
+    free resources while keeping the browser process alive with its cookies.
     """
     global _last_tab
 
@@ -162,16 +141,22 @@ async def _extract_from_tab(browser, link: str) -> dict:
     if not file_id:
         raise ValueError(f"Could not extract file ID from URL: {link}")
 
-    # Navigate to the new page (opens in a new tab)
-    tab = await browser.get(link)
-
-    # Now that the new tab is open, close the previous one
+    # Reuse the existing tab if available (preserves session), otherwise open new
+    tab = None
     if _last_tab is not None:
         try:
-            await _last_tab.close()
+            await _last_tab.get(link)
+            tab = _last_tab
         except Exception:
-            pass
-        _last_tab = None
+            # Stale tab — close it and fall through to open a new one
+            try:
+                await _last_tab.close()
+            except Exception:
+                pass
+            _last_tab = None
+
+    if tab is None:
+        tab = await browser.get(link)
 
     try:
         # Wait for Cloudflare challenge to resolve.
@@ -271,14 +256,14 @@ async def _extract_from_tab(browser, link: str) -> dict:
         }
 
     finally:
-        # Always close the tab — Cloudflare clearance cookies are stored at the
-        # browser level, so closing the tab won't affect CF status for future pages.
-        # Keeping tabs alive causes stale CDP sessions during long downloads.
+        # Navigate away to free page resources, but keep the tab alive so
+        # Chrome doesn't exit (closing the last tab kills the process).
+        # CF clearance cookies persist at the browser level.
         try:
-            await tab.close()
+            await tab.get("about:blank")
         except Exception:
             pass
-        _last_tab = None
+        _last_tab = tab
 
 
 def _extract_file_id(url: str) -> str | None:
